@@ -140,4 +140,4 @@ dmypy.json
 
 # Archive folders
 test/
-storage/
+archives/
