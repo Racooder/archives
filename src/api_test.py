@@ -2,7 +2,7 @@
 
 import requests
 
-url = "http://localhost:5000/"
+url = "http://localhost:8080/"
 
 print(requests.post(url + "archives", json={"name": "test"}).json())
 print(requests.get(url + "archives").json())
