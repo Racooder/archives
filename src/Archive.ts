@@ -3,7 +3,7 @@
 
 import { appendTextLocked, basenameAndExtension, Dict, PATHS, readJsonLocked, readTextLocked, unlinkLocked, writeJsonLocked, writeTextLocked } from "./Essentials";
 import path from 'path';
-import { createReadStream, existsSync, mkdirSync, rename } from 'fs';
+import { createReadStream, existsSync, mkdirSync, rename, readdirSync } from 'fs';
 import RWLockfile from "rwlockfile";
 import { createHash } from "crypto";
 import { v1 as uuidv1 } from 'uuid';
@@ -57,6 +57,15 @@ const allowedFileExtensions = {
 
 export function isExtensionAllowed(extension: string): boolean {
     return allowedFileExtensions.hasOwnProperty(extension);
+}
+
+export function listTags(archive: string): string[] {
+    const tags: string[] = [];
+    const tagFiles = readdirSync(path.join(archivePath(archive), "tags"));
+    tagFiles.forEach(tagFile => {
+        tags.push(tagFile.slice(0, -4));
+    });
+    return tags;
 }
 
 // * Paths
@@ -349,4 +358,32 @@ export async function removeTagFromRecord(archive: string, uuid: string, tag: st
     writeTextLocked(tagPath(archive, tag), uuids.join("\n") + "\n");
 
     return true;
+}
+
+export async function searchRecords(archive: string, titleQuery: string, excludedTags: string[], includedTags: string[]): Promise<string[]> {
+    includedTags = includedTags.length > 0 ? includedTags : listTags(archive);
+    let uuids: string[] = [];
+    includedTags.forEach(async tag => {
+        const tagUuids = await listRecordsWithTag(archive, tag);
+        tagUuids.forEach(uuid => {
+            uuids.push(uuid);
+        });
+    });
+
+    const excludedUuids: string[] = [];
+    excludedTags.forEach(async tag => {
+        const tagUuids = await listRecordsWithTag(archive, tag);
+        tagUuids.forEach(uuid => {
+            excludedUuids.push(uuid);
+        });
+    });
+
+    uuids = uuids.filter(uuid => !excludedUuids.includes(uuid));
+
+    const records: Record[] = new Array(uuids.length);
+    for (let i = 0; i < uuids.length; i++) {
+        readJsonLocked<Record>(recordPath(archive, uuids[i])).then(record => {
+            records[i] = record;
+        });
+    }
 }

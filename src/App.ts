@@ -1,6 +1,6 @@
 import express, { Request, Response } from 'express';
 import multer from 'multer';
-import { addDocumentToRecord, addTagToRecord, archiveExists, archiveFile, createArchive, createRecord, deleteDocument, deleteRecord, documentExists, documentMetaPath, documentObjectPath, isExtensionAllowed, listUnclassified, recordExists, recordPath, removeDocumentFromRecord, removeTagFromRecord, updateRecord } from './Archive';
+import { addDocumentToRecord, addTagToRecord, archiveExists, archiveFile, createArchive, createRecord, deleteDocument, deleteRecord, documentExists, documentMetaPath, documentObjectPath, isExtensionAllowed, listUnclassified, recordExists, recordPath, removeDocumentFromRecord, removeTagFromRecord, searchRecords, updateRecord } from './Archive';
 import { existsSync, mkdirSync, unlink } from 'fs';
 import { PATHS, unlinkFolderContents } from './Essentials';
 import cors from 'cors';
@@ -260,7 +260,19 @@ app.delete("/record/tag", async (req: Request, res: Response) => {
     return res.status(200).send("Tag removed from record");
 });
 
-// TODO: Search records by title and tags
+app.get("/records/search/:archive", (req: Request, res: Response) => {
+    const archive = req.params.archive as string;
+    if (!archiveExists(archive)) return res.status(404).send("Archive not found");
+    const titleStr = req.query.title as string | undefined;
+    const excludedTagsStr = req.query.excludedTags as string | undefined;
+    const includedTagsStr = req.query.includedTags as string | undefined;
+
+    const title = titleStr ? decodeURI(titleStr) : "";
+    const excludedTags = excludedTagsStr ? excludedTagsStr.split(",") : [];
+    const includedTags = includedTagsStr ? includedTagsStr.split(",") : [];
+
+    const records = searchRecords(archive, title, excludedTags, includedTags);
+});
 
 // * Start server
 
