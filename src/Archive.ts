@@ -381,9 +381,10 @@ export async function searchRecords(archive: string, titleQuery: string, exclude
     uuids = uuids.filter(uuid => !excludedUuids.includes(uuid));
 
     const records: Record[] = new Array(uuids.length);
-    for (let i = 0; i < uuids.length; i++) {
-        readJsonLocked<Record>(recordPath(archive, uuids[i])).then(record => {
-            records[i] = record;
-        });
-    }
+    await Promise.all(uuids.map(async (uuid, index) => {
+        records[index] = await readJsonLocked<Record>(recordPath(archive, uuid));
+    }));
+
+    const titleMatches = records.filter(record => record.title.toLowerCase().includes(titleQuery.toLowerCase()));
+    return titleMatches.map(record => record.uuid);
 }
