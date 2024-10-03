@@ -3,7 +3,7 @@ import { existsSync, mkdirSync } from "fs";
 import multer from "multer";
 import { createDocument, deleteDocument, documentExists, getDocumentMeta, renameDocument } from "./models/Document";
 import { createArchivist, deleteArchivist, renameArchivist } from "./models/Archivist";
-import { createArchive, deleteArchive, getArchive, renameArchive } from "./models/Archive";
+import { createArchive, deleteArchive, getArchive, listArchives, renameArchive } from "./models/Archive";
 import { objectPath } from "./Paths";
 import { addDocumentToRecord, addTagToRecord, createRecord, deleteRecord, findRecords, getRecord, removeDocumentFromRecord, removeTagFromRecord, reorderDocumentsInRecord } from "./models/Record";
 import { Types } from "mongoose";
@@ -72,6 +72,12 @@ app.delete("/archivist", async (req, res) => {
 });
 
 // * Archive
+
+// Get all archives
+app.get("/archives", async (req, res) => {
+    const archives = await listArchives();
+    res.status(200).json(archives);
+});
 
 // Create a new archive
 app.post("/archive", async (req, res) => {

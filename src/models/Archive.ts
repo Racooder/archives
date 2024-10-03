@@ -26,6 +26,12 @@ export async function archiveExists(name: string): Promise<boolean> {
     return !!await archiveModel.findById(name);
 }
 
+// List all archives
+export async function listArchives(): Promise<string[]> {
+    const archives = await archiveModel.find({}, { _id: 1 });
+    return archives.map(archive => archive._id);
+}
+
 // Create a new archive
 export async function createArchive(name: string, creator: string): Promise<Archive> {
     if (await archiveModel.findById(name))
