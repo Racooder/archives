@@ -1,12 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, rename, unlinkSync } from "fs";
 import { hashStream } from "../Utility";
-import { Document as MongooseDoc, Model, Schema, model, Types } from "mongoose";
+import { Document as MongooseDoc, Model, Schema, model, Types, UpdateQuery } from "mongoose";
 import { objectFolder, objectPath } from "../Paths";
 import { addMaintainerToArchive, archiveExists } from "./Archive";
 import { archivistExists } from "./Archivist";
+import { ArchiveNotFoundError } from "../errors/Archive";
+import { debug } from "../Log";
 
-export interface Document extends MongooseDoc {
-    _id: Types.ObjectId;
+export interface RawDocument {
     archive: string;
     hash: string;
     name: string;
@@ -16,6 +17,10 @@ export interface Document extends MongooseDoc {
     maintainers: string[];
     createdAt: Date;
     updatedAt: Date;
+}
+
+export interface Document extends RawDocument, MongooseDoc {
+    _id: Types.ObjectId;
 }
 
 interface DocumentModel extends Model<Document> { }
@@ -35,17 +40,20 @@ const documentModel = model<Document, DocumentModel>("Document", documentSchema)
 
 // * Functions
 
-// Check if a document exists
 export async function documentExists(archive: string, hash: string): Promise<boolean> {
     return !!await documentModel.findOne({ archive: archive, hash: hash });
 }
 
+// * Api Functions
+
 // Creates a document from a file
 export async function createDocument(archive: string, creator: string, stream: NodeJS.ReadableStream, name: string, type: string, size: number, path: string): Promise<Document> {
     if (!await archiveExists(archive))
-        throw new Error("Archive not found");
+        throw new ArchiveNotFoundError();
     if (!await archivistExists(creator))
         throw new Error("Archivist not found");
+
+    debug(`Creating document ${name} in ${archive} (${creator})`);
 
     // Hash the file
     const hash = await hashStream(stream)
@@ -68,7 +76,7 @@ export async function createDocument(archive: string, creator: string, stream: N
     // Move the file to the object store if it doesn't already exist
     if (!existsSync(objectPath(hash))) {
         if (!existsSync(objectFolder(hash))) {
-            mkdirSync(objectFolder(hash));
+            mkdirSync(objectFolder(hash), { recursive: true });
         }
         rename(path, objectPath(hash), err => {
             if (err) throw err;
@@ -82,11 +90,13 @@ export async function createDocument(archive: string, creator: string, stream: N
 }
 
 // Get the meta of a document
-export async function getDocumentMeta(archive: string, hash: string): Promise<any> {
+export async function getDocumentMeta(archive: string, hash: string): Promise<RawDocument> {
     if (!await archiveExists(archive))
         throw new Error("Archive not found");
     if (!await documentExists(archive, hash))
         throw new Error("Document not found");
+
+    debug(`Getting document meta ${hash} in ${archive}`);
 
     const documentDoc = await documentModel.findOne({ archive: archive, hash: hash }) as Document;
 
@@ -112,6 +122,9 @@ export function objectExists(hash: string): boolean {
 export function getDocumentObject(hash: string): Buffer {
     if (!objectExists(hash))
         throw new Error("Object not found");
+
+    debug(`Getting document object ${hash}`);
+
     return readFileSync(objectPath(hash));
 }
 
@@ -123,6 +136,8 @@ export async function deleteDocument(archive: string, hash: string, archivist: s
         throw new Error("Archivist not found");
     if (!await documentExists(archive, hash))
         throw new Error("Document not found");
+
+    debug(`Deleting document ${hash} from ${archive} (${archivist})`)
 
     const document = await documentModel.findOne({ archive: archive, hash: hash });
     await document!.deleteOne();
@@ -145,9 +160,11 @@ export async function renameDocument(archive: string, hash: string, newName: str
     if (!await documentExists(archive, hash))
         throw new Error("Document not found");
 
+    debug(`Renaming document ${hash} in ${archive} to ${newName} (${archivist})`);
+
     const document = await documentModel.findOne({ archive: archive, hash: hash }) as Document;
 
-    let updateQuery: any = { name: newName };
+    let updateQuery: UpdateQuery<Document> = { name: newName };
     if (!document.maintainers.includes(archivist)) {
         updateQuery.maintainers = { $push: archivist };
     }

@@ -81,7 +81,7 @@ function save(message: string): void {
 }
 
 export async function setupLog(): Promise<void> {
-    existsSync(folderPath) || mkdirSync(folderPath);
+    existsSync(folderPath) || mkdirSync(folderPath, { recursive: true });
 
     // Delete old logs
     if (config.keep_logs >= 0) {

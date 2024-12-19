@@ -1,15 +1,15 @@
-import { Document as MongooseDoc, Model, Schema, model, Types, UpdateQuery } from "mongoose";
+import { Document as MongooseDoc, Model, Schema, model, Types, UpdateQuery, RootFilterQuery } from "mongoose";
 import { moveElement } from "../Utility";
 import { debug } from "../Log";
 import { archivistExists } from "./Archivist";
 import { documentExists } from "./Document";
 import { archiveExists } from "./Archive";
 
-export interface Record extends MongooseDoc {
+export interface RawRecord {
     _id: Types.ObjectId;
     name: string;
     archive: string;
-    documents: Types.ObjectId[];
+    documents: string[];
     tags: string[];
     creator: string;
     maintainers: string[];
@@ -17,12 +17,14 @@ export interface Record extends MongooseDoc {
     updatedAt: Date;
 }
 
+export interface Record extends RawRecord, MongooseDoc<Types.ObjectId> { }
+
 interface RecordModel extends Model<Record> { }
 
 const recordSchema = new Schema<Record, RecordModel>({
     name: { type: String, required: true },
     archive: { type: String, ref: "Archive", required: true },
-    documents: { type: [Schema.Types.ObjectId], ref: "Document", required: true },
+    documents: { type: [String], required: true },
     tags: { type: [String], required: true },
     creator: { type: String, ref: "Archivist", required: true },
     maintainers: { type: [String], ref: "Archivist", required: true }
@@ -32,7 +34,7 @@ const recordModel = model<Record, RecordModel>("Record", recordSchema);
 
 // * Functions
 
-function sanitizeRecord(record: Record): any {
+function sanitizeRecord(record: Record): RawRecord {
     return {
         _id: record._id,
         name: record.name,
@@ -50,6 +52,8 @@ function sanitizeRecord(record: Record): any {
 export async function recordExists(archive: string, id: Types.ObjectId): Promise<boolean> {
     return !!await recordModel.findOne({ archive: archive, _id: id });
 }
+
+// * Api Functions
 
 // Create a record
 export async function createRecord(archive: string, name: string, creator: string): Promise<Record> {
@@ -71,7 +75,7 @@ export async function createRecord(archive: string, name: string, creator: strin
 }
 
 // Get a record
-export async function getRecord(archive: string, id: Types.ObjectId): Promise<any> {
+export async function getRecord(archive: string, id: Types.ObjectId): Promise<RawRecord> {
     if (!await archiveExists(archive))
         throw new Error("Archive not found");
     if (!await recordExists(archive, id))
@@ -99,7 +103,10 @@ export async function deleteRecord(archive: string, id: Types.ObjectId): Promise
 export async function updateRecord(record: Record, updateQuery: UpdateQuery<Record>, archivist: string): Promise<void> {
     debug(`Updating record ${record._id} (${archivist})`);
     if (!record.maintainers.includes(archivist)) {
-        updateQuery.maintainers = { $push: archivist };
+        if (!updateQuery.$push) {
+            updateQuery.$push = {}
+        }
+        updateQuery.$push.maintainers = archivist;
     }
     await record.updateOne(updateQuery);
 }
@@ -114,20 +121,20 @@ export async function saveModifiedRecord(record: Record, archivist: string): Pro
 }
 
 // Add a document to a record
-export async function addDocumentToRecord(archive: string, record: Types.ObjectId, document: string, archivist: string): Promise<void> {
+export async function addDocumentToRecord(archive: string, record: Types.ObjectId, documentHash: string, archivist: string): Promise<void> {
     if (!await archiveExists(archive))
         throw new Error("Archive not found");
     if (!await recordExists(archive, record))
         throw new Error("Record not found");
-    if (!await documentExists(archive, document))
+    if (!await documentExists(archive, documentHash))
         throw new Error("Document not found");
     if (!await archivistExists(archivist))
         throw new Error("Archivist not found");
 
-    debug(`Adding document ${document} to record ${record} in ${archive} (${archivist})`);
+    debug(`Adding document ${documentHash} to record ${record} in ${archive} (${archivist})`);
     const recordDoc = await recordModel.findById(record) as Record;
 
-    await updateRecord(recordDoc, { documents: { $push: document } }, archivist);
+    await updateRecord(recordDoc, { $push: { documents: documentHash } }, archivist);
 }
 
 // Remove a document from a record
@@ -184,7 +191,7 @@ export async function addTagToRecord(archive: string, record: Types.ObjectId, ar
     debug(`Adding tag ${tag} to record ${record} (${archivist})`);
     const recordDoc = await recordModel.findById(record) as Record;
 
-    await updateRecord(recordDoc, { tags: { $push: tag } }, archivist);
+    await updateRecord(recordDoc, { $push: { tags: tag } }, archivist);
 }
 
 // Remove a tag from a record
@@ -199,18 +206,23 @@ export async function removeTagFromRecord(archive: string, record: Types.ObjectI
     debug(`Removing tag ${tag} from record ${record} (${archivist})`);
     const recordDoc = await recordModel.findById(record) as Record;
 
-    await updateRecord(recordDoc, { tags: { $pull: tag } }, archivist);
+    await updateRecord(recordDoc, { $pull: { tags: tag } }, archivist);
 }
 
-type RecordQuery = { name?: string, includeTags?: string[], excludeTags?: string[], filterTags?: string[] };
+export type RecordQuery = {
+    name?: string,
+    includeTags?: string[],
+    excludeTags?: string[],
+    filterTags?: string[]
+};
 
 // Find records by tag
-export async function findRecords(archive: string, query: RecordQuery): Promise<Record[]> {
+export async function findRecords(archive: string, query: RecordQuery): Promise<RawRecord[]> {
     if (!await archiveExists(archive))
         throw new Error("Archive not found");
 
     debug(`Finding records with query ${JSON.stringify(query)}`);
-    const mongooseQuery: any = {};
+    const mongooseQuery: RootFilterQuery<Record> = {};
     if (query.name) {
         mongooseQuery.name = { $regex: `.*${query.name}.*`, $options: "i" };
     }

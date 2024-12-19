@@ -1,9 +1,9 @@
 import { join } from "path";
 
-export const ARCHIVES_PATH = 'archives';
+export const ARCHIVES_PATH = "archives";
 
 export function objectFolder(hash: string) {
-    return join(ARCHIVES_PATH, hash.slice(0, 2));
+    return join(__dirname, "..", ARCHIVES_PATH, "documents", hash.slice(0, 2));
 }
 
 export function objectPath(hash: string) {

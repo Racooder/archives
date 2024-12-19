@@ -1,104 +1,164 @@
-import { Document as MongooseDoc, Model, Schema, model } from "mongoose";
+import { Document as MongooseDoc, Model, Schema, model, Types } from "mongoose";
 import { archivistExists } from "./Archivist";
+import { ArchiveAlreadyExistsError, ArchiveNotFoundError } from "../errors/Archive";
+import { ArchivistNotFoundError, NotAuthorizedError } from "../errors/Archivist";
+import { debug } from "../Log";
 
-export interface Archive extends MongooseDoc {
-    _id: string; // Name
-    creator: string;
+interface RawArchive {
+    name: string;
+    description: string;
+    owner: string;
     maintainers: string[];
     createdAt: Date;
     updatedAt: Date;
 }
 
+export interface Archive extends RawArchive, MongooseDoc {
+    _id: Types.ObjectId;
+}
+
 interface ArchiveModel extends Model<Archive> { }
 
 const archiveSchema = new Schema<Archive, ArchiveModel>({
-    _id: { type: String },
-    creator: { type: String, ref: 'Archivist', required: true },
+    name: { type: String, required: true, unique: true },
+    owner: { type: String, ref: 'Archivist', required: true },
     maintainers: { type: [String], ref: 'Archivist', required: true }
-}, { _id: false, timestamps: true });
+}, { timestamps: true });
 
 const archiveModel = model<Archive, ArchiveModel>("Archive", archiveSchema);
 
 // * Functions
 
-// Check if an archive exists
 export async function archiveExists(name: string): Promise<boolean> {
-    return !!await archiveModel.findById(name);
+    return !!await archiveModel.findOne({ name });
 }
 
-// List all archives
-export async function listArchives(): Promise<string[]> {
-    const archives = await archiveModel.find({}, { _id: 1 });
-    return archives.map(archive => archive._id);
-}
-
-// Create a new archive
-export async function createArchive(name: string, creator: string): Promise<Archive> {
-    if (await archiveModel.findById(name))
-        throw new Error("Archive already exists");
-    if (!await archivistExists(creator))
-        throw new Error("Archivist not found");
-
-    return archiveModel.create({
-        _id: name,
-        creator: creator,
-        maintainers: [creator]
-    });
-}
-
-// Get information about an archive
-export async function getArchive(name: string): Promise<any | undefined> {
-    const archiveDoc = await archiveModel.findById(name) || undefined;
-
-    if (!archiveDoc) return undefined;
+// Convert a archive document to a raw archive
+function normalizeArchive(document: Archive): RawArchive {
     return {
-        name: archiveDoc._id,
-        creator: archiveDoc.creator,
-        maintainers: archiveDoc.maintainers,
-        createdAt: archiveDoc.createdAt,
-        updatedAt: archiveDoc.updatedAt
+        name: document.name,
+        description: document.description,
+        owner: document.owner,
+        maintainers: document.maintainers,
+        createdAt: document.createdAt,
+        updatedAt: document.updatedAt
     };
 }
 
-// Rename an archive
-export async function renameArchive(name: string, newName: string, archivist: string): Promise<void> {
+// * Api Functions
+
+export async function listArchives(): Promise<string[]> {
+    debug(`Listing archives`);
+
+    const archives = await archiveModel.find({}, { name: 1 });
+    return archives.map(archive => archive.name);
+}
+
+/**
+ * @throws {ArchiveAlreadyExistsError} If an archive with the same name already exists
+ * @throws {ArchivistNotFoundError} If a archivist with the given username does not exist
+ */
+export async function createArchive(name: string, description: string, creator: string): Promise<RawArchive> {
+    if (await archiveModel.findOne({ name }))
+        throw new ArchiveAlreadyExistsError();
+    if (!await archivistExists(creator))
+        throw new ArchivistNotFoundError();
+
+    debug(`Creating archive ${name} (${creator})`);
+
+    const archiveDoc = await archiveModel.create({
+        name,
+        description,
+        owner: creator,
+        maintainers: [creator]
+    });
+
+    return normalizeArchive(archiveDoc);
+}
+
+/**
+ * @throws {ArchiveNotFoundError} If an archive with the given name does not exist
+ */
+export async function getArchive(name: string): Promise<RawArchive> {
+    if (!await archiveExists(name))
+        throw new ArchiveNotFoundError();
+
+    debug(`Getting archive ${name}`);
+
+    const archiveDoc = await archiveModel.findOne({ name });
+    if (!archiveDoc) throw new ArchiveNotFoundError();
+    return normalizeArchive(archiveDoc);
+}
+
+/**
+ * @throws {ArchiveNotFoundError} If an archive with the given name does not exist
+ * @throws {ArchiveAlreadyExistsError} If an archive with the new name already exists
+ * @throws {ArchivistNotFoundError} If a archivist with the given username does not exist
+ */
+export async function renameArchive(name: string, newName: string, archivist: string): Promise<RawArchive> {
+    if (!await archiveExists(name))
+        throw new ArchiveNotFoundError();
     if (await archiveExists(newName))
-        throw new Error("Archive already exists");
-    if (!await archivistExists(archivist))
-        throw new Error("Archivist not found");
+        throw new ArchiveAlreadyExistsError();
 
-    const archive = await archiveModel.findById(name);
+    debug(`Renaming archive ${name} to ${newName} (${archivist})`);
 
-    if (!archive)
-        throw new Error("Archive not found");
-    if (archive.creator !== archivist)
-        throw new Error("Not authorized");
-
-    await archive.updateOne({ _id: newName });
+    const archiveDoc = await archiveModel.findOneAndUpdate({ name }, { name: newName });
+    if (!archiveDoc) throw new ArchiveNotFoundError();
+    return normalizeArchive(archiveDoc);
 }
 
-// Add a maintainer to an archive if they are not already a maintainer
-export async function addMaintainerToArchive(archive: string, maintainer: string): Promise<void> {
-    const archiveDoc = await archiveModel.findById(archive);
+/**
+ * @throws {ArchiveNotFoundError} If an archive with the given name does not exist
+ * @throws {ArchivistNotFoundError} If a archivist with the given username does not exist
+ */
+export async function changeArchiveDescription(name: string, description: string, archivist: string): Promise<RawArchive> {
+    if (!await archiveExists(name))
+        throw new ArchiveNotFoundError();
 
-    if (!archiveDoc)
-        throw new Error("Archive not found");
-    if (archiveDoc.maintainers.includes(maintainer)) return;
+    debug(`Changing archive description of ${name} (${archivist})`);
 
-    await archiveDoc.updateOne({ $push: { maintainers: maintainer } });
+    const archiveDoc = await archiveModel.findOneAndUpdate({ name }, { description });
+    if (!archiveDoc) throw new ArchiveNotFoundError();
+    return normalizeArchive(archiveDoc);
 }
 
-// Delete an archive
+/**
+ * @throws {ArchiveNotFoundError} If an archive with the given name does not exist
+ * @throws {ArchivistNotFoundError} If a archivist with the given username does not exist
+ */
+export async function addMaintainerToArchive(archive: string, maintainer: string): Promise<RawArchive> {
+    if (!await archiveExists(archive))
+        throw new ArchiveNotFoundError();
+
+    debug(`Adding maintainer ${maintainer} to ${archive}`);
+
+    const archiveDoc = await archiveModel.findOne({ name: archive });
+    if (!archiveDoc) throw new ArchiveNotFoundError();
+    if (!archiveDoc.maintainers.includes(maintainer)) {
+        archiveDoc.maintainers.push(maintainer);
+        await archiveDoc.save();
+    }
+    return normalizeArchive(archiveDoc);
+}
+
+/**
+ * @throws {ArchivistNotFoundError} If a archivist with the given username does not exist
+ * @throws {ArchiveNotFoundError} If an archive with the given name does not exist
+ * @throws {NotAuthorizedError} If the archivist is not the owner of the archive
+ */
 export async function deleteArchive(name: string, archivist: string): Promise<void> {
+    if (!await archiveExists(name))
+        throw new ArchiveNotFoundError();
     if (!await archivistExists(archivist))
-        throw new Error("Archivist not found");
+        throw new ArchivistNotFoundError();
 
-    const archive = await archiveModel.findById(name);
+    debug(`Deleting archive ${name} (${archivist})`);
 
-    if (!archive)
-        throw new Error("Archive not found");
-    if (archive.creator !== archivist)
-        throw new Error("Not authorized");
+    const archive = await archiveModel.findOne({ name });
+
+    if (!archive || archive.owner !== archivist)
+        throw new NotAuthorizedError();
 
     await archive.deleteOne();
 }

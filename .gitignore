@@ -1,6 +1,9 @@
 /node_modules/
 /logs/
 /dist/
+/archives/
+/database/
+/uploads/
 
 config.yml
 yarn-error.log
