@@ -1,12 +1,13 @@
 import { Request, Response } from "express";
 import { createArchivist, deleteArchivist } from "../models/Archivist";
+import { respondError } from "../ErrorHandling";
 
 export async function apiCreateArchivist(req: Request<{}, any, {username: string}>, res: Response) {
     try {
         await createArchivist(req.body.username);
         res.status(201).send("Archivist created.");
     } catch (err: any) {
-        res.status(400).send(err.message);
+        respondError(res, err);
     }
 }
 
@@ -30,6 +31,6 @@ export async function apiDeleteArchivist(req: Request<{}, any, {username: string
         await deleteArchivist(req.body.username);
         res.status(200).send("Archivist deleted.");
     } catch (err: any) {
-        res.status(400).send(err.message);
+        respondError(res, err);
     }
 }

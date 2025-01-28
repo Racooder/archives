@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { changeArchiveDescription, createArchive, deleteArchive, getArchive, listArchives, renameArchive } from "../models/Archive";
+import { respondError } from "../ErrorHandling";
 
 export async function apiListArchives(req: Request<{}>, res: Response) {
     const archives = await listArchives();
@@ -11,19 +12,18 @@ export async function apiCreateArchive(req: Request<{}, any, {name: string, desc
         await createArchive(req.body.name, req.body.description, req.body.archivist);
         res.status(201).send("Archive created.");
     } catch (err: any) {
-        res.status(400).send(err.message);
+        respondError(res, err);
     }
 }
 
 export async function apiGetArchive(req: Request<{archive: string}>, res: Response) {
-    const archive = await getArchive(req.params.archive);
-
-    if (!archive) {
-        res.status(404).send("Archive not found.");
-        return;
+    let archive;
+    try {
+        archive = await getArchive(req.params.archive);
+        res.status(200).json(archive);
+    } catch (err: any) {
+        respondError(res, err);
     }
-
-    res.status(200).json(archive);
 }
 
 export async function apiRenameArchive(req: Request<{archive: string}, any, {newName: string, archivist: string}>, res: Response) {
@@ -31,7 +31,7 @@ export async function apiRenameArchive(req: Request<{archive: string}, any, {new
         await renameArchive(req.params.archive, req.body.newName, req.body.archivist);
         res.status(200).send("Archive renamed.");
     } catch (err: any) {
-        res.status(400).send(err.message);
+        respondError(res, err);
     }
 }
 
@@ -40,7 +40,7 @@ export async function apiChangeArchiveDescription(req: Request<{archive: string}
         await changeArchiveDescription(req.params.archive, req.body.description, req.body.archivist);
         res.status(200).send("Description changed.");
     } catch (err: any) {
-        res.status(400).send(err.message);
+        respondError(res, err);
     }
 }
 
@@ -49,6 +49,6 @@ export async function apiDeleteArchive(req: Request<{archive: string}, any, {arc
         await deleteArchive(req.params.archive, req.body.archivist);
         res.status(200).send("Archive deleted.");
     } catch (err: any) {
-        res.status(400).send(err.message);
+        respondError(res, err);
     }
 }

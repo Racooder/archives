@@ -1,17 +1,19 @@
-export class ArchivistNotFoundError extends Error {
+import { ConflictError, NotFoundError, UnauthorizedError } from "../ErrorHandling";
+
+export class ArchivistNotFoundError extends NotFoundError {
     constructor() {
         super("Archivist not found");
     }
 }
 
-export class NotAuthorizedError extends Error {
+export class ArchivistAlreadyExistsError extends ConflictError {
     constructor() {
-        super("Not authorized");
+        super("Archivist already exists");
     }
 }
 
-export class ArchivistAlreadyExistsError extends Error {
+export class NotAuthorizedError extends UnauthorizedError {
     constructor() {
-        super("Archivist already exists");
+        super("Not authorized");
     }
 }

@@ -1,10 +1,10 @@
-import express, { Request } from "express";
+import express from "express";
 import { existsSync, mkdirSync } from "fs";
 import multer from "multer";
 import { apiChangeArchiveDescription, apiCreateArchive, apiDeleteArchive, apiGetArchive, apiListArchives, apiRenameArchive } from "./api/Archive";
 import { apiAddDocumentToRecord, apiAddTagToRecord, apiCreateRecord, apiDeleteRecord, apiFindRecords, apiGetRecord, apiReorderDocumentInRecord } from "./api/Record";
 import { apiCreateArchivist, apiDeleteArchivist } from "./api/Archivist";
-import { apiCreateDocument, apiDeleteDocument, apiGetDocumentMeta, apiGetDocumentObject, apiRenameDocument } from "./api/Document";
+import { apiCreateDocuments, apiDeleteDocument, apiGetDocumentMeta, apiGetDocumentObject, apiGetUnsorted, apiRenameDocument } from "./api/Document";
 import { success } from "./Log";
 import cors from 'cors';
 
@@ -99,8 +99,8 @@ app.delete("/archivist", function (req, res) {
 });
 
 // Documents
-app.post("/document", upload.single("document"), function (req, res) {
-    if (!req.file) {
+app.post("/document", upload.array("files"), function (req, res) {
+    if (!req.files || req.files.length === 0) {
         res.status(400).send("No file uploaded.");
         return;
     }
@@ -113,7 +113,8 @@ app.post("/document", upload.single("document"), function (req, res) {
         return;
     }
 
-    apiCreateDocument(req as Request & {file: Express.Multer.File}, res);
+    if (!req.files) return;
+    apiCreateDocuments(req, res, req.files as Express.Multer.File[]);
 });
 app.get("/document/:archive/:hash/meta", apiGetDocumentMeta);
 app.get("/document/:archive/:hash/object", apiGetDocumentObject);
@@ -122,7 +123,7 @@ app.delete("/document/:archive/:hash", function (req, res) {
         res.status(400).send("Invalid archivist.");
         return;
     }
-
+    
     apiDeleteDocument(req, res);
 });
 app.post("/document/:archive/:hash/rename", function (req, res) {
@@ -134,9 +135,10 @@ app.post("/document/:archive/:hash/rename", function (req, res) {
         res.status(400).send("Invalid archivist.");
         return;
     }
-
+    
     apiRenameDocument(req, res);
 });
+app.get("/unsorted/:archive", apiGetUnsorted);
 
 // Records
 app.post("/record/:archive", function (req, res) {

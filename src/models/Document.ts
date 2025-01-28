@@ -1,11 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, rename, unlinkSync } from "fs";
+import { createReadStream, existsSync, mkdirSync, readFileSync, rename, unlinkSync } from "fs";
 import { hashStream } from "../Utility";
 import { Document as MongooseDoc, Model, Schema, model, Types, UpdateQuery } from "mongoose";
 import { objectFolder, objectPath } from "../Paths";
 import { addMaintainerToArchive, archiveExists } from "./Archive";
 import { archivistExists } from "./Archivist";
-import { ArchiveNotFoundError } from "../errors/Archive";
+import { ArchiveAlreadyExistsError, ArchiveNotFoundError } from "../errors/Archive";
 import { debug } from "../Log";
+import { ArchivistNotFoundError } from "../errors/Archivist";
+import { DocumentAlreadyExists, DocumentNotFoundError, ObjectNotFoundError } from "../errors/Document";
 
 export interface RawDocument {
     archive: string;
@@ -15,6 +17,7 @@ export interface RawDocument {
     fileSize: number;
     creator: string;
     maintainers: string[];
+    unsorted: boolean;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -32,7 +35,8 @@ const documentSchema = new Schema<Document, DocumentModel>({
     fileType: { type: String, required: true },
     fileSize: { type: Number, required: true },
     creator: { type: String, ref: 'Archivist', required: true },
-    maintainers: { type: [String], ref: 'Archivist', required: true }
+    maintainers: { type: [String], ref: 'Archivist', required: true },
+    unsorted: { type: Boolean, required: true, default: true },
 }, { timestamps: true });
 documentSchema.index({ archive: 1, hash: 1 }, { unique: true });
 
@@ -46,23 +50,24 @@ export async function documentExists(archive: string, hash: string): Promise<boo
 
 // * Api Functions
 
-// Creates a document from a file
-export async function createDocument(archive: string, creator: string, stream: NodeJS.ReadableStream, name: string, type: string, size: number, path: string): Promise<Document> {
+/**
+ * @throws {ArchiveNotFoundError} If an archive with the given name does not exist
+ * @throws {ArchivistNotFoundError} If a archivist with the given username does not exist
+ * @throws {DocumentAlreadyExists} If the document with the same hash already exists
+ */
+export async function createDocument(archive: string, creator: string, name: string, type: string, size: number, path: string): Promise<Document> {
     if (!await archiveExists(archive))
         throw new ArchiveNotFoundError();
     if (!await archivistExists(creator))
-        throw new Error("Archivist not found");
+        throw new ArchivistNotFoundError();
 
     debug(`Creating document ${name} in ${archive} (${creator})`);
 
-    // Hash the file
-    const hash = await hashStream(stream)
+    const hash = await hashStream(createReadStream(path));
 
-    // Check if the document already exists
     if (await documentModel.findOne({ archive: archive, hash: hash }))
-        throw new Error("Document already exists");
+        throw new DocumentAlreadyExists();
 
-    // Create the document metadata in the database
     const document = documentModel.create({
         archive: archive,
         hash: hash,
@@ -73,7 +78,6 @@ export async function createDocument(archive: string, creator: string, stream: N
         maintainers: [creator]
     });
 
-    // Move the file to the object store if it doesn't already exist
     if (!existsSync(objectPath(hash))) {
         if (!existsSync(objectFolder(hash))) {
             mkdirSync(objectFolder(hash), { recursive: true });
@@ -83,18 +87,20 @@ export async function createDocument(archive: string, creator: string, stream: N
         });
     };
 
-    // Add maintainer to the archive
     addMaintainerToArchive(archive, creator);
 
     return document;
 }
 
-// Get the meta of a document
+/**
+ * @throws {ArchiveAlreadyExistsError} If an archive with the given name already exists
+ * @throws {DocumentAlreadyExists} If a document with the given hash does not exist
+ */
 export async function getDocumentMeta(archive: string, hash: string): Promise<RawDocument> {
     if (!await archiveExists(archive))
-        throw new Error("Archive not found");
+        throw new ArchiveAlreadyExistsError();
     if (!await documentExists(archive, hash))
-        throw new Error("Document not found");
+        throw new DocumentAlreadyExists();
 
     debug(`Getting document meta ${hash} in ${archive}`);
 
@@ -108,57 +114,65 @@ export async function getDocumentMeta(archive: string, hash: string): Promise<Ra
         fileSize: documentDoc.fileSize,
         creator: documentDoc.creator,
         maintainers: documentDoc.maintainers,
+        unsorted: documentDoc.unsorted,
         createdAt: documentDoc.createdAt,
         updatedAt: documentDoc.updatedAt
     };
 }
 
-// Check if an object exists
 export function objectExists(hash: string): boolean {
     return existsSync(objectPath(hash));
 }
 
-// Get the object of a document
+/**
+ * @throws {ObjectNotFoundError} If a object with the given document hash doesn't exist
+ */
 export function getDocumentObject(hash: string): Buffer {
     if (!objectExists(hash))
-        throw new Error("Object not found");
+        throw new ObjectNotFoundError();
 
     debug(`Getting document object ${hash}`);
 
     return readFileSync(objectPath(hash));
 }
 
-// Delete a document
+/**
+ * @throws {ArchiveNotFoundError} If an archive with the given name does not exist
+ * @throws {ArchivistNotFoundError} If a archivist with the given username does not exist
+ * @throws {DocumentNotFoundError} If the document with the given hash doesn't exists
+ */
 export async function deleteDocument(archive: string, hash: string, archivist: string): Promise<void> {
     if (!await archiveExists(archive))
-        throw new Error("Archive not found");
+        throw new ArchiveNotFoundError();
     if (!await archivistExists(archivist))
-        throw new Error("Archivist not found");
+        throw new ArchivistNotFoundError();
     if (!await documentExists(archive, hash))
-        throw new Error("Document not found");
+        throw new DocumentNotFoundError();
 
     debug(`Deleting document ${hash} from ${archive} (${archivist})`)
 
     const document = await documentModel.findOne({ archive: archive, hash: hash });
     await document!.deleteOne();
 
-    // Delete the object if no other documents reference it
     if (!await documentModel.findOne({ hash: hash })) {
         unlinkSync(objectPath(hash));
     }
 
-    // Add maintainer to the archive
     addMaintainerToArchive(archive, archivist);
 }
 
-// Rename a document
+/**
+ * @throws {ArchiveNotFoundError} If an archive with the given name does not exist
+ * @throws {ArchivistNotFoundError} If a archivist with the given username does not exist
+ * @throws {DocumentNotFoundError} If the document with the given hash doesn't exists
+ */
 export async function renameDocument(archive: string, hash: string, newName: string, archivist: string): Promise<void> {
     if (!await archiveExists(archive))
-        throw new Error("Archive not found");
+        throw new ArchiveNotFoundError();
     if (!await archivistExists(archivist))
-        throw new Error("Archivist not found");
+        throw new ArchivistNotFoundError();
     if (!await documentExists(archive, hash))
-        throw new Error("Document not found");
+        throw new DocumentNotFoundError();
 
     debug(`Renaming document ${hash} in ${archive} to ${newName} (${archivist})`);
 
@@ -170,6 +184,29 @@ export async function renameDocument(archive: string, hash: string, newName: str
     }
     await document.updateOne(updateQuery);
 
-    // Add maintainer to the archive
     addMaintainerToArchive(archive, archivist);
+}
+
+/**
+ * @throws {ArchiveNotFoundError} If an archive with the given name does not exist
+ */
+export async function getUnsorted(archive: string): Promise<string[]> {
+    if (!await archiveExists(archive))
+        throw new ArchiveNotFoundError();
+    
+    const documents = await documentModel.find({ unsorted: true }) as Document[];
+    return documents.map((doc) => doc.hash);
+}
+
+/**
+ * @throws {ArchiveNotFoundError} If an archive with the given name does not exist
+ * @throws {DocumentNotFoundError} If the document with the given hash doesn't exists
+ */
+export async function setUnsorted(archive: string, hash: string, unsorted: boolean) {
+    if (!await archiveExists(archive))
+        throw new ArchiveNotFoundError();
+    if (!await documentExists(archive, hash))
+        throw new DocumentNotFoundError();
+
+    await documentModel.findOneAndUpdate({ hash }, { unsorted });
 }

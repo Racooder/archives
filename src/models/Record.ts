@@ -2,8 +2,12 @@ import { Document as MongooseDoc, Model, Schema, model, Types, UpdateQuery, Root
 import { moveElement } from "../Utility";
 import { debug } from "../Log";
 import { archivistExists } from "./Archivist";
-import { documentExists } from "./Document";
+import { documentExists, setUnsorted } from "./Document";
 import { archiveExists } from "./Archive";
+import { ArchiveNotFoundError } from "../errors/Archive";
+import { ArchivistNotFoundError } from "../errors/Archivist";
+import { DocumentIndexOutOfBoundsError, NewIndexIsSameAsOldError, NewIndexOutOfBoundsError, RecordNotFoundError } from "../errors/Record";
+import { DocumentNotFoundError } from "../errors/Document";
 
 export interface RawRecord {
     _id: Types.ObjectId;
@@ -48,19 +52,21 @@ function sanitizeRecord(record: Record): RawRecord {
     };
 }
 
-// Check if a record exists
 export async function recordExists(archive: string, id: Types.ObjectId): Promise<boolean> {
     return !!await recordModel.findOne({ archive: archive, _id: id });
 }
 
 // * Api Functions
 
-// Create a record
+/**
+ * @throws {ArchiveNotFoundError} If an archive with the given name does not exist
+ * @throws {ArchivistNotFoundError} If a archivist with the given username does not exist
+ */
 export async function createRecord(archive: string, name: string, creator: string): Promise<Record> {
     if (!await archiveExists(archive))
-        throw new Error("Archive not found");
+        throw new ArchiveNotFoundError();
     if (!await archivistExists(creator))
-        throw new Error("Archivist not found");
+        throw new ArchivistNotFoundError();
 
     debug(`Creating record ${name} in ${archive} (${creator})`);
 
@@ -74,24 +80,30 @@ export async function createRecord(archive: string, name: string, creator: strin
     });
 }
 
-// Get a record
+/**
+ * @throws {ArchiveNotFoundError} If an archive with the given name does not exist
+ * @throws {RecordNotFoundError} If a record with the given id does not exist
+ */
 export async function getRecord(archive: string, id: Types.ObjectId): Promise<RawRecord> {
     if (!await archiveExists(archive))
-        throw new Error("Archive not found");
+        throw new ArchiveNotFoundError();
     if (!await recordExists(archive, id))
-        throw new Error("Record not found");
+        throw new RecordNotFoundError();
 
     debug(`Getting record ${id} in ${archive}`);
-    const recordDoc = await recordModel.findById(id) as Record;
+    const recordDoc = await recordModel.findById(id) as Record; // FIXME: This could break
     return sanitizeRecord(recordDoc);
 }
 
-// Delete a record
+/**
+ * @throws {ArchiveNotFoundError} If an archive with the given name does not exist
+ * @throws {RecordNotFoundError} If a record with the given id does not exist
+ */
 export async function deleteRecord(archive: string, id: Types.ObjectId): Promise<void> {
     if (!await archiveExists(archive))
-        throw new Error("Archive not found");
+        throw new ArchiveNotFoundError();
     if (!await recordExists(archive, id))
-        throw new Error("Record not found");
+        throw new RecordNotFoundError();
 
     debug(`Deleting record ${id} in ${archive}`);
     const record = await recordModel.findById(id) as Record;
@@ -99,8 +111,7 @@ export async function deleteRecord(archive: string, id: Types.ObjectId): Promise
     await record.deleteOne();
 }
 
-// Update a record
-export async function updateRecord(record: Record, updateQuery: UpdateQuery<Record>, archivist: string): Promise<void> {
+async function updateRecord(record: Record, updateQuery: UpdateQuery<Record>, archivist: string): Promise<void> {
     debug(`Updating record ${record._id} (${archivist})`);
     if (!record.maintainers.includes(archivist)) {
         if (!updateQuery.$push) {
@@ -111,7 +122,6 @@ export async function updateRecord(record: Record, updateQuery: UpdateQuery<Reco
     await record.updateOne(updateQuery);
 }
 
-// Save a modified record
 export async function saveModifiedRecord(record: Record, archivist: string): Promise<void> {
     debug(`Saving modified record ${record._id} (${archivist})`);
     if (!record.maintainers.includes(archivist)) {
@@ -120,73 +130,99 @@ export async function saveModifiedRecord(record: Record, archivist: string): Pro
     record.save();
 }
 
-// Add a document to a record
+/**
+ * @throws {ArchiveNotFoundError} If an archive with the given name does not exist
+ * @throws {RecordNotFoundError} If a record with the given id does not exist
+ * @throws {DocumentNotFoundError} If a document with the given hash does not exist
+ * @throws {ArchivistNotFoundError} If an archivist with the given name does not exist
+ */
 export async function addDocumentToRecord(archive: string, record: Types.ObjectId, documentHash: string, archivist: string): Promise<void> {
     if (!await archiveExists(archive))
-        throw new Error("Archive not found");
+        throw new ArchivistNotFoundError();
     if (!await recordExists(archive, record))
-        throw new Error("Record not found");
+        throw new RecordNotFoundError();
     if (!await documentExists(archive, documentHash))
-        throw new Error("Document not found");
+        throw new DocumentNotFoundError();
     if (!await archivistExists(archivist))
-        throw new Error("Archivist not found");
+        throw new ArchivistNotFoundError();
 
     debug(`Adding document ${documentHash} to record ${record} in ${archive} (${archivist})`);
     const recordDoc = await recordModel.findById(record) as Record;
 
     await updateRecord(recordDoc, { $push: { documents: documentHash } }, archivist);
+    await setUnsorted(archive, documentHash, false);
 }
 
-// Remove a document from a record
+/**
+ * @throws {ArchiveNotFoundError} If an archive with the given name does not exist
+ * @throws {RecordNotFoundError} If a record with the given id does not exist
+ * @throws {ArchivistNotFoundError} If an archivist with the given name does not exist
+ * @throws {DocumentIndexOutOfBoundsError} If the given document index was outside the bounds of the document array
+ */
 export async function removeDocumentFromRecord(archive: string, record: Types.ObjectId, documentIndex: number, archivist: string): Promise<void> {
     if (!await archiveExists(archive))
-        throw new Error("Archive not found");
+        throw new ArchiveNotFoundError();
     if (!await recordExists(archive, record))
-        throw new Error("Record not found");
+        throw new RecordNotFoundError();
     if (!await archivistExists(archivist))
-        throw new Error("Archivist not found");
+        throw new ArchivistNotFoundError();
 
     debug(`Removing document at index ${documentIndex} from record ${record} in ${archive} (${archivist})`);
     const recordDoc = await recordModel.findById(record) as Record;
 
     if (documentIndex < 0 || documentIndex >= recordDoc.documents.length)
-        throw new Error("Document index out of bounds");
+        throw new DocumentIndexOutOfBoundsError();
 
-    recordDoc.documents.splice(documentIndex, 1);
+    const hash = recordDoc.documents.splice(documentIndex, 1)[0];
     await saveModifiedRecord(recordDoc, archivist);
+    const recordCount = await recordModel.countDocuments({ documents: hash });
+    if (recordCount == 0) {
+        await setUnsorted(archive, hash, true);
+    }
 }
 
-// Reorder documents in a record
+/**
+ * @throws {NewIndexIsSameAsOldError} If the given new index is the same as the given document index
+ * @throws {ArchiveNotFoundError} If an archive with the given name does not exist
+ * @throws {RecordNotFoundError} If a record with the given id does not exist
+ * @throws {ArchivistNotFoundError} If an archivist with the given name does not exist
+ * @throws {DocumentIndexOutOfBoundsError} If the given document index was outside the bounds of the document array
+ * @throws {NewIndexOutOfBoundsError} If the given new index was outside the bounds of the document array
+ */
 export async function reorderDocumentsInRecord(archive: string, record: Types.ObjectId, documentIndex: number, newIndex: number, archivist: string): Promise<void> {
     if (documentIndex === newIndex)
-        throw new Error("New index is the same as the old index");
+        throw new NewIndexIsSameAsOldError();
     if (!await archiveExists(archive))
-        throw new Error("Archive not found");
+        throw new ArchiveNotFoundError();
     if (!await recordExists(archive, record))
-        throw new Error("Record not found");
+        throw new RecordNotFoundError();
     if (!await archivistExists(archivist))
-        throw new Error("Archivist not found");
+        throw new ArchivistNotFoundError();
 
     debug(`Reordering document at index ${documentIndex} to ${newIndex} in record ${record} (${archivist})`);
     const recordDoc = await recordModel.findById(record) as Record;
 
     if (documentIndex < 0 || documentIndex >= recordDoc.documents.length)
-        throw new Error("Document index out of bounds");
+        throw new DocumentIndexOutOfBoundsError()
     if (newIndex < 0 || newIndex >= recordDoc.documents.length)
-        throw new Error("New index out of bounds");
+        throw new NewIndexOutOfBoundsError();
 
     moveElement(recordDoc.documents, documentIndex, newIndex);
     await saveModifiedRecord(recordDoc, archivist);
 }
 
-// Add a tag to a record
+/**
+ * @throws {ArchiveNotFoundError} If an archive with the given name does not exist
+ * @throws {RecordNotFoundError} If a record with the given id does not exist
+ * @throws {ArchivistNotFoundError} If an archivist with the given name does not exist
+ */
 export async function addTagToRecord(archive: string, record: Types.ObjectId, archivist: string, tag: string): Promise<void> {
     if (!await archiveExists(archive))
-        throw new Error("Archive not found");
+        throw new ArchiveNotFoundError();
     if (!await recordExists(archive, record))
-        throw new Error("Record not found");
+        throw new RecordNotFoundError();
     if (!await archivistExists(archivist))
-        throw new Error("Archivist not found");
+        throw new ArchivistNotFoundError();
 
     debug(`Adding tag ${tag} to record ${record} (${archivist})`);
     const recordDoc = await recordModel.findById(record) as Record;
@@ -194,14 +230,18 @@ export async function addTagToRecord(archive: string, record: Types.ObjectId, ar
     await updateRecord(recordDoc, { $push: { tags: tag } }, archivist);
 }
 
-// Remove a tag from a record
+/**
+ * @throws {ArchiveNotFoundError} If an archive with the given name does not exist
+ * @throws {RecordNotFoundError} If a record with the given id does not exist
+ * @throws {ArchivistNotFoundError} If an archivist with the given name does not exist
+ */
 export async function removeTagFromRecord(archive: string, record: Types.ObjectId, archivist: string, tag: string): Promise<void> {
     if (!await archiveExists(archive))
-        throw new Error("Archive not found");
+        throw new ArchiveNotFoundError();
     if (!await recordExists(archive, record))
-        throw new Error("Record not found");
+        throw new RecordNotFoundError();
     if (!await archivistExists(archivist))
-        throw new Error("Archivist not found");
+        throw new ArchivistNotFoundError();
 
     debug(`Removing tag ${tag} from record ${record} (${archivist})`);
     const recordDoc = await recordModel.findById(record) as Record;
@@ -215,11 +255,12 @@ export type RecordQuery = {
     excludeTags?: string[],
     filterTags?: string[]
 };
-
-// Find records by tag
+/**
+ * @throws {ArchiveNotFoundError} If an archive with the given name does not exist
+ */
 export async function findRecords(archive: string, query: RecordQuery): Promise<RawRecord[]> {
     if (!await archiveExists(archive))
-        throw new Error("Archive not found");
+        throw new ArchiveNotFoundError();
 
     debug(`Finding records with query ${JSON.stringify(query)}`);
     const mongooseQuery: RootFilterQuery<Record> = {};

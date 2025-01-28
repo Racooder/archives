@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import { Response } from "express";
 
 // Hashes a stream using SHA-1
 export async function hashStream(stream: NodeJS.ReadableStream): Promise<string> {
